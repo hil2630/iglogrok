@@ -11,6 +11,7 @@
   "description": "Simple yes/no Discord bot that replies when mentioned.",
   "dependencies": {
     "discord.js": "^13.17.1",
-    "dotenv": "^17.4.2"
+    "dotenv": "^17.4.2",
+    "openai": "^6.44.0"
   }
 }

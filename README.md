@@ -1,14 +1,12 @@
 # Grok Discord Bot
 
-Simple Node.js Discord bot that replies with `yes` or `no` when someone tags it.
+Simple Node.js Discord bot that sends tagged questions to OpenAI and replies with a concise answer (max 150 words).
 
 Example:
 
 `@grok is this real?`
 
-Bot replies:
-
-`yes` or `no`
+Bot replies with an AI answer in 150 words or less.
 
 ## 1) Create the bot in Discord Developer Portal
 
@@ -32,7 +30,10 @@ Open the generated URL and invite the bot to your server.
 ```bash
 npm install
 cp .env.example .env
-# edit .env and set DISCORD_BOT_TOKEN
+# edit .env and set:
+# DISCORD_BOT_TOKEN
+# OPENAI_API_KEY
+# OPENAI_MODEL (optional, default is gpt-4.1-mini)
 npm start
 ```
 
