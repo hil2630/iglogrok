@@ -75,19 +75,36 @@ function getImageUrlsFromMessage(message) {
   return urls;
 }
 
-async function collectContextImageUrls(message) {
-  const imageUrls = [...getImageUrlsFromMessage(message)];
+async function fetchRepliedToMessage(message) {
+  if (!message.reference?.messageId || !message.channel?.messages?.fetch) return null;
 
-  if (message.reference?.messageId && message.channel?.messages?.fetch) {
-    try {
-      const repliedToMessage = await message.channel.messages.fetch(message.reference.messageId);
-      imageUrls.push(...getImageUrlsFromMessage(repliedToMessage));
-    } catch (error) {
-      // Ignore fetch issues for referenced messages.
-    }
+  try {
+    return await message.channel.messages.fetch(message.reference.messageId);
+  } catch (error) {
+    // Ignore fetch issues for referenced messages.
+    return null;
+  }
+}
+
+async function collectContextImageUrls(message, repliedToMessage) {
+  const imageUrls = [...getImageUrlsFromMessage(message)];
+  if (repliedToMessage) {
+    imageUrls.push(...getImageUrlsFromMessage(repliedToMessage));
   }
 
   return [...new Set(imageUrls)].slice(0, 4);
+}
+
+function buildReplyContextText(repliedToMessage) {
+  if (!repliedToMessage) return "";
+
+  const content = (repliedToMessage.content || "").trim();
+  if (!content) return "";
+
+  const authorName = repliedToMessage.author?.username || "ukendt bruger";
+  const maxChars = 1200;
+  const clippedContent = content.length > maxChars ? `${content.slice(0, maxChars)}...` : content;
+  return `Beskeden du svarer paa er fra ${authorName}: "${clippedContent}"`;
 }
 
 function rememberReplyForUser(userId, replyMessage) {
@@ -165,6 +182,8 @@ client.on("messageCreate", async (message) => {
 
   let pendingReply = null;
   const isImageRequest = /^(generate|generer)\s+/i.test(prompt);
+  const repliedToMessage = await fetchRepliedToMessage(message);
+  const replyContextText = buildReplyContextText(repliedToMessage);
 
   try {
     pendingReply = await message.reply({
@@ -183,9 +202,13 @@ client.on("messageCreate", async (message) => {
         return;
       }
 
+      const imagePromptWithContext = replyContextText
+        ? `${imagePrompt}\n\nKontekst fra beskeden du svarer paa:\n${replyContextText}`
+        : imagePrompt;
+
       const imageResult = await openai.images.generate({
         model: imageModel,
-        prompt: imagePrompt,
+        prompt: imagePromptWithContext,
         size: "1024x1024",
       });
 
@@ -206,8 +229,15 @@ client.on("messageCreate", async (message) => {
       return;
     }
 
-    const imageUrls = await collectContextImageUrls(message);
+    const imageUrls = await collectContextImageUrls(message, repliedToMessage);
     const userContent = [{ type: "input_text", text: prompt }];
+
+    if (replyContextText) {
+      userContent.push({
+        type: "input_text",
+        text: `Kontekst fra beskeden du svarer paa:\n${replyContextText}`,
+      });
+    }
 
     if (imageUrls.length > 0) {
       userContent.push({
