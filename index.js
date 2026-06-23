@@ -1,11 +1,12 @@
 require("dotenv").config();
 
-const { Client, GatewayIntentBits, Intents } = require("discord.js");
+const { Client, GatewayIntentBits, Intents, AttachmentBuilder, MessageAttachment } = require("discord.js");
 const OpenAI = require("openai");
 
 const token = process.env.DISCORD_BOT_TOKEN;
 const openAiApiKey = process.env.OPENAI_API_KEY;
 const model = process.env.OPENAI_MODEL || "gpt-4.1-mini";
+const imageModel = process.env.OPENAI_IMAGE_MODEL || "gpt-image-1";
 
 if (!token) {
   console.error("Missing DISCORD_BOT_TOKEN in environment.");
@@ -33,6 +34,10 @@ const intents = GatewayIntentBits
     ];
 
 const client = new Client({ intents });
+const buildAttachment = AttachmentBuilder
+  ? (buffer, name) => new AttachmentBuilder(buffer, { name })
+  : (buffer, name) => new MessageAttachment(buffer, name);
+const userReplyHistory = new Map();
 
 function trimToMaxWords(text, maxWords) {
   const words = text.trim().split(/\s+/);
@@ -43,6 +48,53 @@ function trimToMaxWords(text, maxWords) {
 function extractPrompt(content, botId) {
   const mentionRegex = new RegExp(`<@!?${botId}>`, "g");
   return content.replace(mentionRegex, "").trim();
+}
+
+function extractImagePrompt(prompt) {
+  return prompt.replace(/^(generate|generer)\s+/i, "").trim();
+}
+
+function rememberReplyForUser(userId, replyMessage) {
+  const existing = userReplyHistory.get(userId) || [];
+  existing.push({
+    channelId: replyMessage.channelId || replyMessage.channel?.id,
+    messageId: replyMessage.id,
+  });
+
+  // Keep only recent reply refs per user to avoid unbounded memory growth.
+  if (existing.length > 30) {
+    existing.splice(0, existing.length - 30);
+  }
+
+  userReplyHistory.set(userId, existing);
+}
+
+async function removeRepliesForUser(userId) {
+  if (!client.user) return 0;
+
+  const refs = userReplyHistory.get(userId) || [];
+  let removedCount = 0;
+
+  for (const ref of refs) {
+    if (!ref.channelId || !ref.messageId) continue;
+
+    try {
+      const channel = await client.channels.fetch(ref.channelId);
+      if (!channel || !("messages" in channel)) continue;
+
+      const botMessage = await channel.messages.fetch(ref.messageId);
+      if (!botMessage) continue;
+      if (botMessage.author?.id !== client.user.id) continue;
+
+      await botMessage.delete();
+      removedCount += 1;
+    } catch (error) {
+      // Ignore missing/undeletable messages and continue cleanup.
+    }
+  }
+
+  userReplyHistory.delete(userId);
+  return removedCount;
 }
 
 client.once("ready", () => {
@@ -58,39 +110,101 @@ client.on("messageCreate", async (message) => {
 
   if (!prompt) {
     await message.reply({
-      content: "Tag me with a question and I will answer in 150 words max.",
+      content: "Tag mig med et spoergsmaal, saa svarer jeg paa dansk (maks 150 ord).",
       allowedMentions: { repliedUser: false },
     });
     return;
   }
 
+  if (/^(remove|fjern)\b/i.test(prompt)) {
+    const removedCount = await removeRepliesForUser(message.author.id);
+    await message.reply({
+      content: removedCount
+        ? `Jeg har fjernet ${removedCount} af dine tidligere Grok-svar.`
+        : "Jeg fandt ingen tidligere Grok-svar at fjerne.",
+      allowedMentions: { repliedUser: false },
+    });
+    return;
+  }
+
+  let pendingReply = null;
+  const isImageRequest = /^(generate|generer)\s+/i.test(prompt);
+
   try {
+    pendingReply = await message.reply({
+      content: isImageRequest ? "Generating image..." : "Thinkin...",
+      allowedMentions: { repliedUser: false },
+    });
+
+    if (isImageRequest) {
+      const imagePrompt = extractImagePrompt(prompt);
+
+      if (!imagePrompt) {
+        await pendingReply.edit({
+          content: "Skriv fx: @grok Generate en futuristisk by ved solnedgang.",
+          allowedMentions: { repliedUser: false },
+        });
+        return;
+      }
+
+      const imageResult = await openai.images.generate({
+        model: imageModel,
+        prompt: imagePrompt,
+        size: "1024x1024",
+      });
+
+      const base64Image = imageResult.data?.[0]?.b64_json;
+      if (!base64Image) {
+        throw new Error("OpenAI image response did not include b64_json data.");
+      }
+
+      const imageBuffer = Buffer.from(base64Image, "base64");
+      const imageFile = buildAttachment(imageBuffer, `grok-${Date.now()}.png`);
+
+      await pendingReply.edit({
+        content: "Her er dit billede.",
+        files: [imageFile],
+        allowedMentions: { repliedUser: false },
+      });
+      rememberReplyForUser(message.author.id, pendingReply);
+      return;
+    }
+
     const response = await openai.responses.create({
       model,
       input: [
         {
           role: "system",
           content:
-            "You are Grok, a concise Discord assistant. Answer the user's question clearly in no more than 150 words.",
+            "Du er Grok, en kortfattet Discord-assistent. Svar altid paa dansk og svar paa brugerens spoergsmaal tydeligt med maks 150 ord.",
         },
         { role: "user", content: prompt },
       ],
       max_output_tokens: 260,
     });
 
-    const aiText = response.output_text?.trim() || "I could not generate a response right now.";
+    const aiText = response.output_text?.trim() || "Jeg kunne ikke generere et svar lige nu.";
     const finalText = trimToMaxWords(aiText, 150);
 
-    await message.reply({
+    await pendingReply.edit({
       content: finalText,
       allowedMentions: { repliedUser: false },
     });
+    rememberReplyForUser(message.author.id, pendingReply);
   } catch (error) {
     console.error("Failed to generate AI reply:", error);
-    await message.reply({
-      content: "I hit an error talking to OpenAI. Please try again in a moment.",
-      allowedMentions: { repliedUser: false },
-    });
+    if (pendingReply) {
+      await pendingReply.edit({
+        content: "Der skete en fejl eller du overholdte ikke reglerne. Prøv igen om et ojeblik.",
+        allowedMentions: { repliedUser: false },
+      });
+      rememberReplyForUser(message.author.id, pendingReply);
+    } else {
+      await message.reply({
+        content: "Der skete en fejl eller du overholdte ikke reglerne. Prøv igen om et ojeblik.",
+        allowedMentions: { repliedUser: false },
+      });
+    }
   }
 });
 

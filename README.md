@@ -1,12 +1,20 @@
 # Grok Discord Bot
 
-Simple Node.js Discord bot that sends tagged questions to OpenAI and replies with a concise answer (max 150 words).
+Simple Node.js Discord bot that:
+- answers tagged questions in Danish (max 150 words), and
+- can generate images when asked with `Generate`.
 
 Example:
 
-`@grok is this real?`
+`@grok er det her rigtigt?`
 
 Bot replies with an AI answer in 150 words or less.
+
+Image example:
+
+`@grok Generate en viking i neon cyberpunk stil`
+
+Bot replies with an AI-generated image.
 
 ## 1) Create the bot in Discord Developer Portal
 
@@ -34,6 +42,7 @@ cp .env.example .env
 # DISCORD_BOT_TOKEN
 # OPENAI_API_KEY
 # OPENAI_MODEL (optional, default is gpt-4.1-mini)
+# OPENAI_IMAGE_MODEL (optional, default is gpt-image-1)
 npm start
 ```
 
