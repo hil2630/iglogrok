@@ -54,6 +54,42 @@ function extractImagePrompt(prompt) {
   return prompt.replace(/^(generate|generer)\s+/i, "").trim();
 }
 
+function isImageAttachment(attachment) {
+  const contentType = (attachment.contentType || "").toLowerCase();
+  if (contentType.startsWith("image/")) return true;
+
+  const url = (attachment.url || "").toLowerCase();
+  return /\.(png|jpe?g|gif|webp|bmp)(\?.*)?$/.test(url);
+}
+
+function getImageUrlsFromMessage(message) {
+  const urls = [];
+  if (!message?.attachments) return urls;
+
+  for (const attachment of message.attachments.values()) {
+    if (isImageAttachment(attachment) && attachment.url) {
+      urls.push(attachment.url);
+    }
+  }
+
+  return urls;
+}
+
+async function collectContextImageUrls(message) {
+  const imageUrls = [...getImageUrlsFromMessage(message)];
+
+  if (message.reference?.messageId && message.channel?.messages?.fetch) {
+    try {
+      const repliedToMessage = await message.channel.messages.fetch(message.reference.messageId);
+      imageUrls.push(...getImageUrlsFromMessage(repliedToMessage));
+    } catch (error) {
+      // Ignore fetch issues for referenced messages.
+    }
+  }
+
+  return [...new Set(imageUrls)].slice(0, 4);
+}
+
 function rememberReplyForUser(userId, replyMessage) {
   const existing = userReplyHistory.get(userId) || [];
   existing.push({
@@ -170,6 +206,23 @@ client.on("messageCreate", async (message) => {
       return;
     }
 
+    const imageUrls = await collectContextImageUrls(message);
+    const userContent = [{ type: "input_text", text: prompt }];
+
+    if (imageUrls.length > 0) {
+      userContent.push({
+        type: "input_text",
+        text: "Brug ogsaa disse billeder som kontekst til svaret.",
+      });
+
+      for (const imageUrl of imageUrls) {
+        userContent.push({
+          type: "input_image",
+          image_url: imageUrl,
+        });
+      }
+    }
+
     const response = await openai.responses.create({
       model,
       input: [
@@ -178,7 +231,7 @@ client.on("messageCreate", async (message) => {
           content:
             "Du er Grok, en kortfattet Discord-assistent. Svar altid paa dansk og svar paa brugerens spoergsmaal tydeligt med maks 150 ord.",
         },
-        { role: "user", content: prompt },
+        { role: "user", content: userContent },
       ],
       max_output_tokens: 260,
     });
