@@ -1,0 +1,16 @@
+{
+  "name": "grok-discord-bot",
+  "version": "1.0.0",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "description": "Simple yes/no Discord bot that replies when mentioned.",
+  "dependencies": {
+    "discord.js": "^13.17.1",
+    "dotenv": "^17.4.2"
+  }
+}
